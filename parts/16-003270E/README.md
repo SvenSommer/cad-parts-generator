@@ -24,9 +24,10 @@ etwa ±0,1 mm. Der Abgleich Modell gegen Zeichnung liegt als
 | `CONEC_16-003270E_SnapLock_Clip_zeichnungsabgleich.png` | Modellschnitte des Clips über der CONEC-Zeichnung |
 | `CONEC_16-003270E_Raststift_4-40_render.png` | Produktbild Stift + Federscheibe |
 | `create_snaplock_clip_step.py` | Clip-Generator (CadQuery), alle Maße als Konstanten |
-| `create_detent_pin_step.py` | Generator Stift + Federscheibe (Gewinde aus `screws/`) |
+| `create_detent_pin_step.py` | Generator Stift + Federscheibe (`simple` = Onshape-tauglich, `helix` = echtes Gewinde) |
 | `check_against_drawing.py` | erzeugt den Zeichnungsabgleich des Clips |
 | `render_checks.py`, `render_checks_pin.py` | erzeugen die Kontrollblätter (Blender headless) |
+| `onshape_assemble.py` | Upload nach Onshape und Platzierung in der SD-AC1-DS-Assembly |
 
 ```
 .venv/bin/python parts/16-003270E/create_snaplock_clip_step.py
@@ -79,13 +80,20 @@ Bezugssystem wie bei den Schraubteilen in `screws/`: z = 0 an der
 Anlagefläche des Sechskants, +z zur Gewindespitze, Kopf bei negativem z.
 Die Federscheibe liegt im selben System bei z = 0 … 1,2 (entspannt).
 
-- **Gewinde** 4-40 UNC-2A, 4,5 lang, echt geschnitten, Anschnitt C 0,3.
+- **Gewinde** 4-40 UNC-2A, 4,5 lang, Anschnitt C 0,3. Die ausgelieferte
+  STEP-Datei trägt das Gewinde als glatten Zylinder auf dem Nenndurchmesser
+  (`THREAD_STYLE = 'simple'`): das echt geschnittene Helix-Gewinde
+  (`helix`, Datei `*_gewinde.step`) besteht zwar OCCs Gültigkeitsprüfung,
+  hinterlässt an der Gewindestirn aber eine Splitterfläche von 1e-5 mm²,
+  und Onshape importiert es dann nur als Oberfläche (02.09.2026). Für
+  Assembly und Zeichnung reicht der Zylinder.
 - **Sechskant** SW 4,8 × 4,8, abgedrehte Fasen C 0,2 unten / C 0,4 oben.
-- **Bund** Ø 3,1 × 1,8 · **Hals** Ø 2,6 × 0,4 · **Kuppe** Ø 3,0, 2,3 hoch,
-  oben Fläche Ø 1,0 mit Körnermarke. Kopf über dem Sechskant 4,5, Stift
-  gesamt 13,8.
+- **Bund** Ø 3,1 × 1,8 · **Hals** Ø 2,6 × 0,6 (Gabel 0,5 + Spiel) ·
+  **Kuppe** Ø 3,0, 2,3 hoch, oben Fläche Ø 1,0 mit Körnermarke. Kopf über
+  dem Sechskant 4,7, Stift gesamt 14,0.
 - **Federscheibe** Sprengring Nr. 4 (ASME B18.21.1): Ø 2,95 / 5,3 × 0,64,
-  Enden um 0,55 versetzt.
+  flach modelliert (wie unter dem Sechskant verbaut; `WASHER_RISE` > 0
+  ergibt die aufgebogene Form).
 
 Quellen: Sechskant und Gewinde sind Normmaße der D-Sub-Befestigung (wie
 BKL 10120256). Bund, Hals und Kuppe sind aus der 3D-Ansicht des Datenblatts
@@ -94,6 +102,35 @@ Prototypfoto `sdlink-manuals/assets/images/sd-ac1-ds/sd-ac1-ds_2.png`
 gegengeprüft: ±0,2 mm, Gewindelänge ±0,5 mm. Die Haubenzeichnung bemaßt
 den Stift nicht; die Kugelkontur Ø 4,3 in ihrem Schnitt ist die
 Stiftkammer der Haube, nicht der Stift.
+
+## Onshape (SD-AC1-DS, Dokument 9d9be5d218fd741d3272e193)
+
+Stand 02.09.2026: alle drei Teile sind als benannte Part Studios im
+Dokument (`SnapLock-Clip 16-003270E` 2e89e533…, `Raststift 4-40 UNC
+16-003270E` 8441d752…, `Federscheibe 16-003270E` c671cac5…) und in der
+Assembly „Zusammenbau" je zweimal eingefügt und platziert; mit dem Gehäuse
+sind sie in „Gruppe CONEC-Satz" zusammengefasst. Die älteren Studios
+`CONEC_16-003270E_SnapLock_Clip` (Klammer, alter Fuß) und
+`CONEC_16-003270E_Federscheibe` samt Blobs sind nicht mehr referenziert und
+können gelöscht werden.
+
+Die Bauteilnamen kommen aus dem STEP (Export über eine einteilige
+CadQuery-Assembly, `export_named`), sonst heißt alles „Part 1".
+
+Platzierung (`onshape_assemble.py place`), abgeleitet aus den
+Transformationen der NorComp-Steckverbinder in der Assembly:
+
+- **Clips** an den Befestigungslöchern der Buchse 180-026-213R001, Clip-z = 0
+  bei 1,45 mm hinter der Flansch-Vorderseite, +z in das Gehäuse. Herleitung:
+  Raststift des AC-1 auf dessen Flansch (= Spitze der Buchsenschale, 5,84):
+  Scheibe 0,64 + Sechskant 4,8 + Bund 1,8 → Hals bei −1,40 … −2,00, die
+  Gabel sitzt mittig darin. Der Bund Ø 3,1 läuft durch das Flanschloch
+  Ø 3,05 der Buchse.
+- **Raststifte + Federscheiben** auf der Flansch-Vorderseite des Steckers
+  180-026-113R001, Scheibe 0,64 unter dem Sechskant, Gewinde in den Flansch.
+
+Zugang: `~/.config/onshape/credentials_write.json` (Key mit Write-Scope);
+die Lese-Skripte in `prodflux/scripts/` nutzen weiter `credentials.json`.
 
 ## Annahmen und was am echten Teil zu prüfen ist
 

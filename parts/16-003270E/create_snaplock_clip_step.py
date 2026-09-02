@@ -58,6 +58,22 @@ import cadquery as cq
 
 BASE = Path(__file__).resolve().parent
 NAME = 'CONEC_16-003270E_SnapLock_Clip'
+PART_NAME = 'SnapLock-Clip 16-003270E'     # Bauteilname in Onshape
+STAINLESS = (0.75, 0.76, 0.78)
+
+
+def export_named(body, out, name, rgb):
+    """STEP mit Bauteilname und Farbe schreiben.
+
+    Shape.exportStep() schreibt kein PRODUCT mit Namen — Onshape nennt das
+    Teil dann „Part 1". Der Umweg über eine einteilige Assembly legt Name
+    und Farbe im STEP ab (Onshape übernimmt beides).
+    """
+    assy = cq.Assembly(body, name=name, color=cq.Color(*rgb))
+    if hasattr(assy, 'export'):
+        assy.export(str(out))
+    else:
+        assy.save(str(out), exportType='STEP')
 
 T = 0.50            # Blechdicke
 W = 11.60           # Breite Schenkel/Oberteil
@@ -242,7 +258,7 @@ def step_path():
 def main():
     body = build()
     out = step_path()
-    body.exportStep(str(out))
+    export_named(body, out, PART_NAME, STAINLESS)
     bb = body.BoundingBox()
     print(f'Wrote {out}')
     print(f'  valid={body.isValid()} solids={len(body.Solids())} '

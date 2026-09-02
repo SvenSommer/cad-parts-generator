@@ -25,7 +25,7 @@ Aufbau des Stifts, von der Spitze zum Kopf:
   Gewinde     4-40 UNC-2A, 4,5 lang, Anschnitt C 0,3
   Sechskant   SW 4,8, 4,8 hoch, Fase C 0,2 unten / C 0,4 oben (abgedreht)
   Bund        Ø 3,1 × 1,8
-  Hals        Ø 2,6 × 0,4          ← hier sitzt die Gabel des Clips
+  Hals        Ø 2,6 × 0,6          ← hier sitzt die Gabel des Clips (0,5 + Spiel)
   Kuppe       Ø 3,0, 2,3 hoch, oben Fläche Ø 1,0 mit Körnermarke
 Federscheibe: Sprengring Nr. 4 (ASME B18.21.1 regular), Innen-Ø 2,95,
 Außen-Ø 5,3, Dicke 0,64, aufgebogen (Enden axial versetzt).
@@ -39,24 +39,36 @@ import cadquery as cq
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE.parent.parent / 'screws'))
 from create_screw_step import BORE_OVERLAP, UNC_4_40, cone, cyl, thread_solid  # noqa: E402
+if str(BASE) not in sys.path:      # hinten anhängen: screws/render_checks.py hat Vorrang
+    sys.path.append(str(BASE))
+from create_snaplock_clip_step import export_named  # noqa: E402
 
 PIN_NAME = 'CONEC_16-003270E_Raststift_4-40'
 WASHER_NAME = 'CONEC_16-003270E_Federscheibe'
+PIN_PART_NAME = 'Raststift 4-40 UNC 16-003270E'      # Bauteilnamen in Onshape
+WASHER_PART_NAME = 'Federscheibe 16-003270E'
+NICKEL = (0.81, 0.80, 0.77)
 
 THREAD_L, LEAD_IN = 4.50, 0.30
+# 'simple': glatter Zylinder auf dem Nenndurchmesser mit Anschnittfase — importiert
+# sicher in Onshape (Parasolid). 'helix': echt geschnittenes Gewinde; die
+# Helix-Booleans hinterlassen Splitterflächen, die Onshape als Fehler wertet
+# (nur Oberfläche importiert, 02.09.2026) — bleibt für Renderings.
+THREAD_STYLE = 'simple'
 HEX_AF, HEX_H = 4.80, 4.80
 HEX_CH_BOT, HEX_CH_TOP = 0.20, 0.40
 COLLAR_D, COLLAR_L = 3.10, 1.80
-NECK_D, NECK_L = 2.60, 0.40
+NECK_D, NECK_L = 2.60, 0.60      # Hals: Gabel 0,5 + Spiel
 DOME_D, DOME_H, DOME_STRAIGHT = 3.00, 2.30, 0.50
 DOME_TOP_D = 1.00
 DIMPLE_D, DIMPLE_DEPTH = 0.50, 0.12
 
 WASHER_ID, WASHER_OD, WASHER_T = 2.95, 5.30, 0.64
-WASHER_GAP_DEG, WASHER_RISE = 25.0, 0.55     # Lücke; axialer Versatz der Enden
+WASHER_GAP_DEG, WASHER_RISE = 25.0, 0.0      # Lücke; axialer Versatz der Enden (0 = flach, wie verbaut)
 
 
-def build_pin():
+def build_pin(thread_style=None):
+    thread_style = thread_style or THREAD_STYLE
     d, p = UNC_4_40['d'], UNC_4_40['p']
     h = 0.8660254 * p
     r_core = d / 2 - 17 * h / 24
@@ -73,10 +85,14 @@ def build_pin():
     # Gewinde z = 0 … THREAD_L mit Anschnittfase an der Spitze. Der Kern
     # beginnt 0,3 tiefer im Sechskant: Enden Kern und Gewindegang in derselben
     # Ebene z = 0, lässt OCC beide als lose Körper stehen (2 Solids, invalid).
-    shaft = (cyl(r_core, -0.3, THREAD_L)
-             .fuse(thread_solid(d, p, 0.0, THREAD_L))
-             .intersect(cyl(d / 2 + BORE_OVERLAP, -0.35, THREAD_L - LEAD_IN).fuse(
-                 cone(d / 2 + BORE_OVERLAP, d / 2 - LEAD_IN, THREAD_L - LEAD_IN, THREAD_L))))
+    if thread_style == 'helix':
+        shaft = (cyl(r_core, -0.3, THREAD_L)
+                 .fuse(thread_solid(d, p, 0.0, THREAD_L))
+                 .intersect(cyl(d / 2 + BORE_OVERLAP, -0.35, THREAD_L - LEAD_IN).fuse(
+                     cone(d / 2 + BORE_OVERLAP, d / 2 - LEAD_IN, THREAD_L - LEAD_IN, THREAD_L))))
+    else:
+        shaft = cyl(d / 2, -0.3, THREAD_L - LEAD_IN).fuse(
+            cone(d / 2, d / 2 - LEAD_IN, THREAD_L - LEAD_IN, THREAD_L))
 
     # Kopf: Bund, Hals, Kuppe (Rotationskörper), leicht in den Sechskant hinein
     z_collar = -HEX_H - COLLAR_L
@@ -110,6 +126,11 @@ def build_washer():
     """
     r_in, r_out = WASHER_ID / 2, WASHER_OD / 2
     r_m = (r_in + r_out) / 2
+    if WASHER_RISE == 0:
+        # flach (zusammengedrückt, wie unter dem Sechskant verbaut): Ring mit Lücke
+        return (cq.Workplane('XZ')
+                .polyline([(r_in, 0), (r_out, 0), (r_out, WASHER_T), (r_in, WASHER_T)]).close()
+                .revolve(360 - WASHER_GAP_DEG, (0, 0, 0), (0, 1, 0)).val())
     turn = (360 - WASHER_GAP_DEG) / 360
     pitch = WASHER_RISE / turn
     spine = cq.Workplane('XY').add(cq.Wire.makeHelix(pitch, WASHER_RISE, r_m))
@@ -118,8 +139,8 @@ def build_washer():
     return ring.translate(cq.Vector(0, 0, WASHER_T / 2))
 
 
-def report(body, out):
-    body.exportStep(str(out))
+def report(body, out, name):
+    export_named(body, out, name, NICKEL)
     bb = body.BoundingBox()
     print(f'Wrote {out}')
     print(f'  valid={body.isValid()} solids={len(body.Solids())} faces={len(body.Faces())} '
@@ -129,8 +150,11 @@ def report(body, out):
 
 
 def main():
-    report(build_pin(), BASE / f'{PIN_NAME}.step')
-    report(build_washer(), BASE / f'{WASHER_NAME}.step')
+    style = sys.argv[1] if len(sys.argv) > 1 else THREAD_STYLE
+    suffix = '' if style == 'simple' else '_gewinde'
+    report(build_pin(style), BASE / f'{PIN_NAME}{suffix}.step', PIN_PART_NAME)
+    if style == 'simple':
+        report(build_washer(), BASE / f'{WASHER_NAME}.step', WASHER_PART_NAME)
 
 
 if __name__ == '__main__':
