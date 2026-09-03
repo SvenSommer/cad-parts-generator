@@ -209,3 +209,138 @@ def place():
 
 if __name__ == '__main__' and sys.argv[1] == 'place':
     place()
+
+
+# ---------------------------------------------------------------------------
+# Echte Mates per API (Lehre vom 03.09.2026: Lage per Transformation + Gruppe
+# koppelt die Teile nicht sauber; Robert setzt Zylindrisch/Planar-Mates von
+# Hand). Hier: Fastened-Mate zwischen zwei impliziten Mate-Connectoren, jeder
+# ON_ENTITY auf einer Kreiskante (Ursprung = Kreismitte, z = Kreisnormale).
+# Deterministische IDs der Kanten liefert /partstudios/.../bodydetails.
+#
+# Fallen: (1) Connectoren gehören als `subFeatures` in das Mate; der Server
+# vergibt ihnen neue featureIds, die Referenzen im Mate müssen danach per
+# Update nachgezogen werden. (2) Nur Pflichtparameter senden — ein Parameter,
+# der nicht zur Feature-Spezifikation passt (z.B. secondaryAxisType), wird
+# als 400 abgelehnt oder lässt das Feature stumm im Fehler stehen.
+# (3) featureIds und Instanz-IDs enthalten '/' und '+': in URLs kodieren.
+# ---------------------------------------------------------------------------
+import copy  # noqa: E402
+import urllib.parse  # noqa: E402
+
+
+def enc(s):
+    return urllib.parse.quote(s, safe='')
+
+
+def features():
+    return get(f'/assemblies/d/{DID}/w/{WID}/e/{AID}/features')
+
+
+def feature_status(fid):
+    return features()['featureStates'].get(fid, {}).get('featureStatus')
+
+
+def delete_feature(fid):
+    delete(f'/assemblies/d/{DID}/w/{WID}/e/{AID}/features/featureid/{enc(fid)}')
+
+
+def features_v1(raw=False):
+    """Unversionierter Endpunkt: die einzige Ausgabe, die implizite Connectoren
+    enthält. raw=True liefert die {type, typeName, message}-Rohform, die der
+    unversionierte POST auch erwartet; sonst flach mit btType."""
+    r = requests.get(f'https://cad.onshape.com/api/assemblies/d/{DID}/w/{WID}/e/{AID}/features',
+                     auth=auth(), headers={'Accept': 'application/json'}, timeout=120)
+    r.raise_for_status()
+    if raw:
+        return r.json()['features']
+
+    def val(o):
+        if isinstance(o, dict):
+            if 'message' in o and 'typeName' in o:
+                inner = val(o['message']); inner['btType'] = o.get('typeName'); return inner
+            return {k: val(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [val(v) for v in o]
+        return o
+    return [val(f) for f in r.json()['features']]
+
+
+def _strip_node_ids(o):
+    if isinstance(o, dict):
+        o.pop('nodeId', None)
+        for v in o.values():
+            _strip_node_ids(v)
+    elif isinstance(o, list):
+        for v in o:
+            _strip_node_ids(v)
+
+
+def fastened_mate(name, occ_a, ent_a, occ_b, ent_b, inf_a='CENTER', inf_b='CENTER', flip_b=False):
+    """Fastened-Mate zwischen Geometrie ent_a von Instanz occ_a und ent_b von occ_b.
+
+    Weg, der funktioniert (03.09.2026): ein vorhandenes Mate mit zwei impliziten
+    Connectoren in der Rohform des unversionierten Endpunkts als Vorlage
+    nehmen, nur Name, Mate-Typ, Geometrie-IDs, Instanzpfade, inferenceType
+    und flipPrimary ersetzen, nodeIds entfernen und über denselben
+    unversionierten Endpunkt zurückschicken. Der Server vergibt den
+    Connectoren neue IDs und schreibt die Referenzen im Mate selbst um.
+    Über /api/v6 werden mateConnectors stillschweigend verworfen.
+    inferenceType: CENTER (Kreiskante, Planfläche), BOTTOM_/TOP_/MID_AXIS_POINT
+    (Zylinderfläche). Geometrie-IDs aus /partstudios/.../bodydetails.
+    """
+    tpl = next(f for f in features_v1(raw=True)
+               if f['message'].get('featureType') == 'mate' and len(f['message'].get('mateConnectors') or []) == 2)
+    feat = copy.deepcopy(tpl)
+    _strip_node_ids(feat)
+    m = feat['message']
+    m['name'] = name
+    m.pop('featureId', None)
+    targets = [('mcA', occ_a, ent_a, inf_a, False), ('mcB', occ_b, ent_b, inf_b, flip_b)]
+    for p in m['parameters']:
+        pm = p['message']
+        if pm.get('parameterId') == 'mateType':
+            pm['value'] = 'FASTENED'
+        if pm.get('parameterId') == 'mateConnectorsQuery':
+            for q, t in zip(pm['queries'], targets):
+                q['message']['featureId'] = t[0]
+    for mc, (fid, occ, geo, inf, flip) in zip(m['mateConnectors'], targets):
+        mm = mc['message']
+        mm['featureId'] = fid
+        mm['name'] = 'Verknüpfungsverbindung'
+        for p in mm['parameters']:
+            pm = p['message']
+            if pm.get('parameterId') == 'originQuery':
+                qm = pm['queries'][0]['message']
+                qm.update(geometryIds=[geo], secondGeometryId='', inferenceType=inf, path=[occ])
+            if pm.get('parameterId') == 'flipPrimary':
+                pm['value'] = flip
+    r = requests.post(f'https://cad.onshape.com/api/assemblies/d/{DID}/w/{WID}/e/{AID}/features', auth=auth(),
+                      json={'feature': feat}, headers={'Accept': 'application/json', 'Content-Type': 'application/json'},
+                      timeout=120)
+    if r.status_code >= 300:
+        raise RuntimeError(f'{r.status_code} {r.text[:500]}')
+    time.sleep(4)
+    stored = next(f for f in features_v1() if f['name'] == name)
+    return stored['featureId'], feature_status(stored['featureId'])
+
+
+def relative_pose(occ_ref, occ_part):
+    """Lage von occ_part im Koordinatensystem von occ_ref (mm)."""
+    ra = assembly()['rootAssembly']
+    occ = {o['path'][0]: occ_matrix(o['transform']) for o in ra['occurrences'] if len(o['path']) == 1}
+    return np.linalg.inv(occ[occ_ref]) @ occ[occ_part]
+
+
+if __name__ == '__main__' and sys.argv[1] == 'mate-led':
+    COVER, LED = 'MckuF4wnPJphGF8D5', 'M+Fx7pQakF9BYM4eN'
+    for f in features()['features']:
+        if f['name'].startswith(('Fastened LED', 'MC ')):
+            delete_feature(f['featureId']); print('aufgeräumt:', f['name'])
+    flip = len(sys.argv) > 2 and sys.argv[2] == 'flip'
+    # Cover: untere Kreiskante der LED-Bohrung (z = 15,3); LED: Nahtkante Linse (z = 1,6)
+    fid, st = fastened_mate('Fastened LED', COVER, 'RlBF', LED, 'KFhC', flip_b=flip)
+    print('Mate', fid, 'Status', st)
+    m = relative_pose(COVER, LED)
+    print('LED im Cover-System: Ursprung', np.round(m[:3, 3], 2).tolist(), 'z-Achse', np.round(m[:3, 2], 3).tolist(),
+          'x-Achse', np.round(m[:3, 0], 3).tolist())
