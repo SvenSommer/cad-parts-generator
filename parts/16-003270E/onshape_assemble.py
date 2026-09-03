@@ -344,3 +344,91 @@ if __name__ == '__main__' and sys.argv[1] == 'mate-led':
     m = relative_pose(COVER, LED)
     print('LED im Cover-System: Ursprung', np.round(m[:3, 3], 2).tolist(), 'z-Achse', np.round(m[:3, 2], 3).tolist(),
           'x-Achse', np.round(m[:3, 0], 3).tolist())
+
+
+# ---------------------------------------------------------------------------
+# „fürs Foto": der SD-Link-Schriftzug liegt beim Drucken 0,15 mm unter der
+# Oberfläche (Entfernen mit Startversatz 0,15 / Tiefe 0,15) und schimmert nur
+# durch. Für Zeichnung und Renderings wird derselbe Schriftzug zusätzlich
+# 0,1 mm von der Oberfläche her ausgeschnitten (Muster in SD-TY96-DS,
+# SD-KRT2-A u. a.: Extrude „fürs Foto"). Nach dem Export wieder unterdrücken,
+# das Druckmodell darf den Schnitt nicht haben.
+# ---------------------------------------------------------------------------
+STUDIO = '8c37d0ae370ae0be3c6c5d28'                 # Part Studio SD-AC1-DS
+LOGO_CUTS = ('FOFpDT0sQzmpNpf_2', 'FnipiGFNg1ccJsK_2')  # Linear austragen 19 (Body), 20 (Cover)
+FOTO_NAME = 'fürs Foto'
+
+
+def studio_features():
+    return get(f'/partstudios/d/{DID}/w/{WID}/e/{STUDIO}/features')
+
+
+def foto_features_create():
+    feats = studio_features()['features']
+    made = []
+    for fid in LOGO_CUTS:
+        src = next(f for f in feats if f['featureId'] == fid)
+        feat = copy.deepcopy(src)
+        _strip_node_ids(feat)
+        feat.pop('featureId', None)
+        feat['name'] = FOTO_NAME
+        for p in feat['parameters']:
+            pid = p.get('parameterId')
+            if pid == 'startOffset':
+                p['value'] = False
+            if pid == 'depth':
+                p['expression'] = '0.1 mm'; p['value'] = 0.0001
+        r = post(f'/partstudios/d/{DID}/w/{WID}/e/{STUDIO}/features', {'feature': feat})
+        made.append(r['feature']['featureId'])
+        print(f"  angelegt: {FOTO_NAME!r} aus {src['name']!r} → {made[-1]} state={r.get('featureState', {}).get('featureStatus')}")
+    return made
+
+
+def foto_features_set_suppressed(suppressed):
+    for f in studio_features()['features']:
+        if f['name'] == FOTO_NAME and bool(f.get('suppressed')) != suppressed:
+            f['suppressed'] = suppressed
+            r = post(f'/partstudios/d/{DID}/w/{WID}/e/{STUDIO}/features/featureid/{enc(f["featureId"])}', {'feature': f})
+            print(f"  {f['featureId']} suppressed={suppressed} state={r.get('featureState', {}).get('featureStatus')}")
+
+
+def foto_features_status():
+    fs = studio_features()
+    for f in fs['features']:
+        if f['name'] == FOTO_NAME:
+            print(f"  {f['featureId']} suppressed={f.get('suppressed')} status={fs['featureStates'].get(f['featureId'], {}).get('featureStatus')}")
+
+
+if __name__ == '__main__' and sys.argv[1] == 'foto':
+    what = sys.argv[2]
+    if what == 'create':
+        foto_features_create()
+    elif what == 'on':
+        foto_features_set_suppressed(False)
+    elif what == 'off':
+        foto_features_set_suppressed(True)
+    foto_features_status()
+
+
+def export_drawing(eid, out_pdf, fmt='PDF'):
+    """Zeichnung als PDF exportieren (Translation, dann externe Daten laden)."""
+    r = post(f'/drawings/d/{DID}/w/{WID}/e/{eid}/translations',
+             {'formatName': fmt, 'destinationName': Path(out_pdf).stem, 'storeInDocument': False,
+              'showOverriddenDimensions': True, 'colorMethod': 'color', 'currentSheetOnly': False})
+    tid = r['id']
+    for _ in range(90):
+        info = get(f'/translations/{tid}')
+        if info.get('requestState') in ('DONE', 'FAILED'):
+            break
+        time.sleep(2)
+    if info.get('requestState') != 'DONE':
+        raise RuntimeError(f"Export {info.get('requestState')}: {info.get('failureReason')}")
+    data_id = info['resultExternalDataIds'][0]
+    rr = requests.get(f'{B}/documents/d/{DID}/externaldata/{data_id}', auth=auth(), timeout=120)
+    rr.raise_for_status()
+    Path(out_pdf).write_bytes(rr.content)
+    print(f'Wrote {out_pdf} ({len(rr.content)} Bytes)')
+
+
+if __name__ == '__main__' and sys.argv[1] == 'drawing':
+    export_drawing('a7bf0ea522f52b9287d67846', sys.argv[2])

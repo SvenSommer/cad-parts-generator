@@ -132,6 +132,31 @@ Transformationen der NorComp-Steckverbinder in der Assembly:
 Zugang: `~/.config/onshape/credentials_write.json` (Key mit Write-Scope);
 die Lese-Skripte in `prodflux/scripts/` nutzen weiter `credentials.json`.
 
+### Schriftzug „fürs Foto"
+
+Der SD-Link-Schriftzug liegt beim Drucken 0,15 mm unter der Oberfläche
+(Skizze 15/„Linear austragen 19" auf der Body-Unterseite, Skizze 16/„Linear
+austragen 20" auf der Cover-Oberseite: Entfernen mit Startversatz 0,15 und
+Tiefe 0,15) und schimmert nur durch. Für Zeichnung und Renderings gibt es
+wie in den anderen Adapter-Dokumenten je ein Extrude **„fürs Foto"**, das
+dieselben Skizzenregionen ohne Versatz 0,1 mm von der Oberfläche her
+ausschneidet (Features `FSCI7HyNHC4UqeY_4`, `FG1pPc3dV8aADlr_4`).
+
+```
+onshape_assemble.py foto on      # Schnitte aktiv → Modell fürs Foto
+onshape_assemble.py foto off     # unterdrücken → Druckmodell
+onshape_assemble.py drawing out.pdf   # Zeichnung „Assembly 1 Drawing 1" als PDF
+```
+
+Vor dem Drucken müssen die Schnitte unterdrückt sein (`foto off`).
+`SD-AC1-DS_assembly_fuersFoto.glb` ist die Assembly mit sichtbarem
+Schriftzug für Renderings (`render_assembly.py`), das Produktbild
+`SD-AC1-DS_assembly_render.png` ist daraus entstanden.
+
+Grenze der API: Die Zeichnung berechnet ihre Ansichten erst beim Öffnen im
+Browser neu. Ein PDF-Export per API liefert den zuletzt berechneten Stand,
+auch nach Modify-Aufrufen; also Zeichnung einmal öffnen, dann exportieren.
+
 ## Annahmen und was am echten Teil zu prüfen ist
 
 - **Gabelfuß:** Länge über die Stiftachse hinaus (1,3) stammt aus dem
